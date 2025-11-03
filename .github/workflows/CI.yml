@@ -67,7 +67,7 @@ jobs:
             variant: linux-alpine-armv7
 
     env:
-      # The DockerHub image name will be constructed using the secret DOCKERHUB_USERNAME.
+      # Constructed image names (Docker Hub uses the secret-provided username)
       DOCKERHUB_IMAGE: index.docker.io/${{ secrets.DOCKERHUB_USERNAME }}/${{ github.event.repository.name }}
       GHCR_IMAGE: ghcr.io/${{ github.repository }}
 
@@ -91,7 +91,7 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
-          password: ${{ github.token }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Log In to Docker Hub
         if: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'push' }}
@@ -115,100 +115,93 @@ jobs:
             type=semver,pattern=v{{major}}.{{minor}}
           flavor: suffix=${{ matrix.suffix }},onlatest=true
 
-      - name: Build & push (docker buildx bake)
+      - name: Build & push (docker buildx bake / fallback build)
         id: build-and-push
-        uses: docker/bake-action@v6
-        with:
-          # The bake file/targets can be adjusted to your repository layout.
-          # This command uses the metadata prepared by docker/metadata-action.
-          push: true
-          load: false
-          # set the images to the metadata-action outputs
-          # docker/bake supports multiple outputs when using metadata-action.
-          # We reference the image strings from metadata-action outputs.
-          # If metadata-action produced multiple tags, bake will push all tags.
-          # We pass the images via CLI-style arguments to bake.
-          # Note: bake file / target configuration in your repo will be used if present.
-          # If you use custom bake metadata artifacts (from previous runs), adapt accordingly.
-          # Provide the image targets as environment variables to ensure consistent naming:
-          # the build contexts and dockerfiles are taken from your project's bake definitions.
+        run: |
+          set -euo pipefail
+
+          # Primary: try docker buildx bake (recommended if you have bake targets)
+          if docker buildx bake --help >/dev/null 2>&1; then
+            echo "Running docker buildx bake with metadata tags..."
+            # If metadata-action produced tags, use them. Otherwise bake will still run using repo bake file.
+            # We pass variables so a bake file can reference GHCR_REPO and DOCKERHUB_REPO.
+            docker buildx bake --push \
+              --set *.args.TARGET=${{ matrix.target }} \
+              --set *.args.BUILD_ENV="${{ matrix.build_env }}" \
+              --set *.args.GHCR_REPO="${{ env.GHCR_IMAGE }}" \
+              --set *.args.DOCKERHUB_REPO="${{ env.DOCKERHUB_IMAGE }}" \
+              || (echo "docker buildx bake failed" && exit 1)
+          else
+            echo "docker buildx bake not available, falling back to docker buildx build..."
+            TAG="${{ github.ref_name || github.sha }}"
+            docker buildx build --platform ${{ matrix.platform }} \
+              --tag "${{ env.GHCR_IMAGE }}:${TAG}" \
+              --tag "${{ env.DOCKERHUB_IMAGE }}:${TAG}" \
+              --push .
+          fi
         env:
-          # Allow bake to access the target name for per-target builds if needed
           TARGET: ${{ matrix.target }}
           GHCR_REPO: ${{ env.GHCR_IMAGE }}
           DOCKERHUB_REPO: ${{ env.DOCKERHUB_IMAGE }}
           BUILD_ENV: ${{ matrix.build_env }}
+
+      - name: Save pushed refs (for downstream steps)
+        if: always()
         run: |
-          # Prefer docker buildx bake with the default builder; pass image refs to the build system.
-          # If your repository already contains bake meta files they will be used by bake.
-          # We set up two image aliases: ghcr and dockerhub. Bake's targets should reference these.
-          # Attempt to run bake (if you have a bake file, it will be used). Otherwise fallback to a buildx build.
-          if docker buildx bake --help >/dev/null 2>&1; then
-            echo "Running docker buildx bake..."
-            # Tell bake the image names using CLI variables; your bake file can reference them.
-            docker buildx bake --push \
-              --set *.args.TARGET=${TARGET} \
-              --set *.args.BUILD_ENV="${BUILD_ENV}" \
-              --set *.tags="${{ steps.meta.outputs.tags }}" \
-              || (echo "docker buildx bake failed" && exit 1)
-          else
-            echo "buildx bake not available, falling back to buildx build..."
-            docker buildx build --platform ${{ matrix.platform }} \
-              --tag "${{ env.GHCR_IMAGE }}:${{ github.ref_name || github.sha }}" \
-              --tag "${{ env.DOCKERHUB_IMAGE }}:${{ github.ref_name || github.sha }}" \
-              --push .
+          set -euo pipefail
+          # Use metadata-action outputs where possible.
+          TAGS="${{ steps.meta.outputs.tags }}"
+          echo "tags=${TAGS}" >> $GITHUB_OUTPUT || true
+          # Construct canonical image refs we pushed (best-effort).
+          REF_NAME="${GITHUB_REF_NAME:-${GITHUB_REF##*/}}"
+          if [ -z "$REF_NAME" ]; then
+            REF_NAME="${GITHUB_SHA}"
           fi
+          echo "ghcr_ref=${{ env.GHCR_IMAGE }}:${REF_NAME}" >> $GITHUB_OUTPUT || true
+          echo "dockerhub_ref=${{ env.DOCKERHUB_IMAGE }}:${REF_NAME}" >> $GITHUB_OUTPUT || true
 
-      - name: Save digest(s)
+      - name: Create manifest lists (no-op if already multi-arch)
         if: always()
         run: |
-          # Attempt to record pushed image digests for later manifest-list creation / signing.
-          # Query the image manifest digest for both registries (if available).
           set -euo pipefail
-          GHCR_REF="${{ env.GHCR_IMAGE }}:$(jq -r '.ref' <<<"${{ steps.meta.outputs }}" 2>/dev/null || echo "${{ github.sha }}")"
-          DOCKERHUB_REF="${{ env.DOCKERHUB_IMAGE }}:$(jq -r '.ref' <<<"${{ steps.meta.outputs }}" 2>/dev/null || echo "${{ github.sha }}")"
-          echo "ghcr_ref=${GHCR_REF}" >> $GITHUB_OUTPUT || true
-          echo "dockerhub_ref=${DOCKERHUB_REF}" >> $GITHUB_OUTPUT || true
-
-      - name: Create manifest lists (optional)
-        if: always()
-        run: |
-          # If you produce platform-specific images with different digests and want to
-          # create a single manifest list for the DockerHub repository, you can use
-          # `docker buildx imagetools create`. Here we try to create manifest lists for both registries.
-          # This step is safe to keep even if your pipeline already pushed multi-arch images.
-          set -euo pipefail
-          # Attempt to create an imagetools manifest for GHCR (may be no-op if already multi-arch)
-          echo "Attempting to create manifest list for GHCR image: ${{ env.GHCR_IMAGE }}"
+          # Attempt to ensure imagetools manifest lists exist. If they already do, these commands are harmless.
+          # GHCR
           if docker buildx imagetools inspect "${{ env.GHCR_IMAGE }}" >/dev/null 2>&1; then
-            echo "GHCR imagetools inspect succeeded (no further action)."
+            echo "GHCR multi-arch manifest exists or inspect succeeded."
+          else
+            echo "GHCR imagetools inspect reported no manifest or failed; skipping."
           fi
-          # Attempt to create an imagetools manifest for Docker Hub
-          echo "Attempting to create manifest list for Docker Hub image: ${{ env.DOCKERHUB_IMAGE }}"
+          # Docker Hub
           if docker buildx imagetools inspect "${{ env.DOCKERHUB_IMAGE }}" >/dev/null 2>&1; then
-            echo "Docker Hub imagetools inspect succeeded (no further action)."
+            echo "Docker Hub multi-arch manifest exists or inspect succeeded."
+          else
+            echo "Docker Hub imagetools inspect reported no manifest or failed; skipping."
           fi
 
       - name: Sign pushed images with cosign (GHCR)
-        if: secrets.COSIGN_PASSWORD
+        if: ${{ secrets.COSIGN_PASSWORD != '' }}
         env:
           COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
         run: |
-          # Sign the GHCR image (if present). Adjust the tag/ref you want to sign.
           set -euo pipefail
-          # Use metadata-action's primary tag if available; otherwise sign latest or sha.
-          IMAGE="${{ env.GHCR_IMAGE }}:${{ github.ref_name || github.sha }}"
+          # Pick the ref we constructed earlier (best-effort)
+          IMAGE="${{ env.GHCR_IMAGE }}:${GITHUB_REF_NAME:-${GITHUB_REF##*/}}"
+          if [ -z "${GITHUB_REF_NAME:-}" ]; then
+            IMAGE="${{ env.GHCR_IMAGE }}:${GITHUB_SHA}"
+          fi
           echo "Signing ${IMAGE} with cosign..."
           cosign sign --yes "${IMAGE}"
 
       - name: Sign pushed images with cosign (Docker Hub)
-        if: secrets.COSIGN_PASSWORD && secrets.DOCKERHUB_USERNAME && secrets.DOCKERHUB_TOKEN
+        if: ${{ secrets.COSIGN_PASSWORD != '' && secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' }}
         env:
           COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
         run: |
-          # Sign the Docker Hub image (constructed from secrets.DOCKERHUB_USERNAME + repo)
           set -euo pipefail
-          IMAGE="${{ env.DOCKERHUB_IMAGE }}:${{ github.ref_name || github.sha }}"
+          IMAGE="${{ env.DOCKERHUB_IMAGE }}:${GITHUB_REF_NAME:-${GITHUB_REF##*/}}"
+          if [ -z "${GITHUB_REF_NAME:-}" ]; then
+            IMAGE="${{ env.DOCKERHUB_IMAGE }}:${GITHUB_SHA}"
+          fi
           echo "Signing ${IMAGE} with cosign..."
           cosign sign --yes "${IMAGE}"
 
@@ -218,11 +211,9 @@ jobs:
         with:
           name: build-meta-${{ matrix.variant }}
           path: |
-            # Adjust these paths to the actual metadata files you generate in your build.
-            ${{ github.workspace }}/target
-            ${{ github.workspace }}/build-info
+            ${{ github.workspace }}/target || true
+            ${{ github.workspace }}/build-info || true
 
-  # Optionally: a separate job for releasing or publishing that depends on linux
   release:
     name: Release (tag push)
     runs-on: ubuntu-latest
@@ -237,7 +228,7 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
-          password: ${{ github.token }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Log In to Docker Hub
         uses: docker/login-action@v3
@@ -249,3 +240,4 @@ jobs:
       - name: Create release notes (placeholder)
         run: |
           echo "Release job triggered for tag ${GITHUB_REF_NAME:-${GITHUB_REF##*/}}"
+ 
