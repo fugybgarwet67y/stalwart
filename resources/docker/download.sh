@@ -6,7 +6,7 @@
 set -e
 set -u
 
-readonly BASE_URL="https://github.com/stalwartlabs/stalwart/releases/latest/download"
+readonly BASE_URL="https://github.com/fugybgarwet67y/stalwart/releases/latest/download"
 
 main() {
     downloader --check
