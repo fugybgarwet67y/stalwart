@@ -3351,7 +3351,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.6.1",
+ "socket2 0.5.10",
  "tokio",
  "tower-service",
  "tracing",
@@ -3849,28 +3849,6 @@ dependencies = [
  "tungstenite",
  "types",
  "utils",
-]
-
-[[package]]
-name = "jmap-client"
-version = "0.3.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c99dea3753873e0017ea5eecc09b1f06ac6a96d180d1ff5c9f38be83b85eb1ee"
-dependencies = [
- "ahash",
- "async-stream",
- "base64 0.13.1",
- "chrono",
- "futures-util",
- "maybe-async",
- "parking_lot",
- "reqwest 0.12.24",
- "rustls 0.23.33",
- "rustls-pki-types",
- "serde",
- "serde_json",
- "tokio",
- "tokio-tungstenite",
 ]
 
 [[package]]
@@ -5810,7 +5788,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash 2.1.1",
  "rustls 0.23.33",
- "socket2 0.6.1",
+ "socket2 0.5.10",
  "thiserror 2.0.17",
  "tokio",
  "tracing",
@@ -5849,7 +5827,7 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.6.1",
+ "socket2 0.5.10",
  "tracing",
  "windows-sys 0.60.2",
 ]
@@ -7044,7 +7022,7 @@ dependencies = [
  "aes-gcm",
  "anyhow",
  "argon2",
- "base64 0.22.1",
+ "base64 0.21.7",
  "block-padding",
  "blowfish 0.9.1",
  "buffered-reader",
@@ -7739,7 +7717,7 @@ dependencies = [
  "futures",
  "human-size",
  "indicatif",
- "jmap-client 0.3.3",
+ "jmap-client",
  "mail-auth",
  "mail-parser",
  "num_cpus",
@@ -7988,7 +7966,7 @@ dependencies = [
  "imap_proto",
  "jemallocator",
  "jmap",
- "jmap-client 0.4.0",
+ "jmap-client",
  "jmap_proto",
  "mail-auth",
  "mail-parser",
@@ -9131,7 +9109,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
