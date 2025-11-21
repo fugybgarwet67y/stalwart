@@ -28,7 +28,7 @@ mail-builder = { version = "0.4" }
 smtp-proto = { version = "0.2", features = ["rkyv", "serde"] }
 sieve-rs = { version = "0.7", features = ["rkyv"] } 
 ahash = { version = "0.8" }
-rustls = { version = "0.23.34", default-features = false, features = ["std", "ring", "tls12"] }
+rustls = { version = "0.23.35", default-features = false, features = ["std", "ring", "tls12"] }
 rustls-pemfile = "2.0"
 rustls-pki-types = { version = "1" }
 tokio = { version = "1.47", features = ["full"] }
